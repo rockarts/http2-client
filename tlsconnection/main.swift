@@ -48,6 +48,30 @@ connection.stateUpdateHandler = { state in
             
             if negotiatedProtocol == "h2" {
                 print("Connection ready for HTTP/2 frame exchange!")
+                
+                connection.send(content: Data("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".utf8), completion: .contentProcessed({ (error) in
+                    if let err = error {
+                        print("Error sending HTTP/2 PRI packet: \(err)")
+                    } else {
+                        connection.receive(minimumIncompleteLength: 1, maximumLength: 100) { (data, context, isComplete, error) in
+                            if let error = error {
+                                print("Error receiving response: \(error)")
+                                exit(1)
+                            }
+                            
+                            if let responseData = data, !responseData.isEmpty {
+                                print("Response received: \(responseData.count) bytes")
+                                print("Hex dump: \(responseData.hexString)")
+                                print("HTTP/2 handshake initiated!")
+                            } else {
+                                print("No response received")
+                            }
+                            
+                            connection.cancel()
+                            exit(0)
+                        }
+                    }
+                }))
             } else {
                 print("Error: HTTP/2 not negotiated, got \(negotiatedProtocol)")
                 exit(1)
@@ -57,8 +81,6 @@ connection.stateUpdateHandler = { state in
             exit(1)
         }
         
-        connection.cancel()
-        exit(0)
     case .failed(let error):
         print("TLS connection failed: \(error)")
         exit(1)
@@ -136,4 +158,10 @@ private func describeTLSVersion(_ version: tls_protocol_version_t) -> String {
 
 private func describeCipherSuite(_ suite: tls_ciphersuite_t) -> String {
     return "0x\(String(suite.rawValue, radix: 16))"
+}
+
+extension Data {
+    var hexString: String {
+        return self.map { String(format: "%02x", $0) }.joined(separator: " ")
+    }
 }
