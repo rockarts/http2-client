@@ -13,21 +13,16 @@ import Network
 import Security
 
 let args = CommandLine.arguments
-
-print(args[1])
-print(args[2])
 let host = NWEndpoint.Host(args[1])
 let port =  NWEndpoint.Port(args[2])
- 
 
 func createTLSParametersWithALPN() -> NWParameters {
     let tlsOptions = NWProtocolTLS.Options()
-    
-    //Set the protocol options
     sec_protocol_options_add_tls_application_protocol(tlsOptions.securityProtocolOptions, "h2")
     sec_protocol_options_add_tls_application_protocol(tlsOptions.securityProtocolOptions, "http/1.1")
     
     let tcpOptions = NWProtocolTCP.Options()
+    tcpOptions.connectionTimeout = 5
     let parameters = NWParameters(tls: tlsOptions, tcp: tcpOptions)
     
     return parameters
@@ -40,8 +35,28 @@ connection.stateUpdateHandler = { state in
     switch state {
     case .ready:
         print("TLS connection established!")
-        print("Negotiated protocol: \(extractNegotiatedALPN(from: connection) ?? "")")
-        print("Ready for HTTP/2!")
+        
+        guard verifyConnectionState(connection: connection) else {
+            print("Connection state verification failed")
+            exit(1)
+        }
+        
+        printTLSDetails(connection: connection)
+        
+        if let negotiatedProtocol = extractNegotiatedALPN(from: connection) {
+            print("Negotiated protocol: \(negotiatedProtocol)")
+            
+            if negotiatedProtocol == "h2" {
+                print("Connection ready for HTTP/2 frame exchange!")
+            } else {
+                print("Error: HTTP/2 not negotiated, got \(negotiatedProtocol)")
+                exit(1)
+            }
+        } else {
+            print("Error: Could not determine negotiated protocol")
+            exit(1)
+        }
+        
         connection.cancel()
         exit(0)
     case .failed(let error):
@@ -78,4 +93,47 @@ private func extractNegotiatedALPN(from connection: NWConnection) -> String? {
     }
     
     return String(cString: negotiatedProtocolPtr)
+}
+
+private func verifyConnectionState(connection: NWConnection) -> Bool {
+    guard connection.currentPath != nil else {
+        print("No viable network path")
+        return false
+    }
+    
+    guard connection.currentPath?.status == .satisfied else {
+        print("Network path not satisfied")
+        return false
+    }
+    
+    return true
+}
+
+private func printTLSDetails(connection: NWConnection) {
+    guard let tlsMetadata = connection.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata else {
+        print("Could not retrieve TLS metadata")
+        return
+    }
+    
+    let securityMetadata = tlsMetadata.securityProtocolMetadata
+    
+    let tlsVersion = sec_protocol_metadata_get_negotiated_tls_protocol_version(securityMetadata)
+    print("TLS Version: \(describeTLSVersion(tlsVersion))")
+    
+    let cipherSuite = sec_protocol_metadata_get_negotiated_tls_ciphersuite(securityMetadata)
+    print("Cipher Suite: \(describeCipherSuite(cipherSuite))")
+}
+
+private func describeTLSVersion(_ version: tls_protocol_version_t) -> String {
+    switch version {
+    case .TLSv10: return "1.0"
+    case .TLSv11: return "1.1"
+    case .TLSv12: return "1.2"
+    case .TLSv13: return "1.3"
+    default: return "Unknown"
+    }
+}
+
+private func describeCipherSuite(_ suite: tls_ciphersuite_t) -> String {
+    return "0x\(String(suite.rawValue, radix: 16))"
 }
